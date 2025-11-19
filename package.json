@@ -10,6 +10,7 @@
     "cors": "^2.8.5",
     "luxon": "^3.5.0",
     "city-timezones": "^1.1.0",
-    "node-fetch": "^3.3.2"
+    "iztro": "^3.0.5",
+    "geo-tz": "^7.0.0"
   }
 }
