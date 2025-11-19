@@ -1,38 +1,20 @@
 import express from "express";
 import cors from "cors";
 import { DateTime } from "luxon";
-import cityTimezones from "city-timezones";
 import { astro } from "iztro";
+import { resolveTimezone } from "./lib/timezone.js";
+import { computeZiWeiData } from "./lib/ziwei.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-function findTimezone(cityName, countryName) {
-  const results = cityTimezones.lookupViaCity(cityName);
-
-  if (!results || results.length === 0) {
-    console.warn("City not found, fallback to UTC");
-    return "UTC";
-  }
-
-  // Filter berdasarkan negara kalau ada
-  if (countryName) {
-    const filtered = results.filter(
-      r => r.country.toLowerCase() === countryName.toLowerCase()
-    );
-    if (filtered.length > 0) return filtered[0].timezone;
-  }
-
-  return results[0].timezone; // default result
-}
 
 function getTimeIndex(hour) {
   if (hour === 23) return 0;
   return Math.floor(hour / 2); // 0–11 cabang bumi
 }
 
-app.post("/ziwei", (req, res) => {
+app.post("/ziwei", async (req, res) => {
   try {
     const { birthDate_iso, birthTime, city, country, gender = "unknown" } = req.body;
 
@@ -40,7 +22,8 @@ app.post("/ziwei", (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const detectedTz = findTimezone(city, country);
+    const tzResult = await resolveTimezone(city, country);
+    const detectedTz = tzResult.timezone;
 
     const localDT = DateTime.fromISO(`${birthDate_iso}T${birthTime}`, {
       zone: detectedTz
@@ -60,13 +43,21 @@ app.post("/ziwei", (req, res) => {
       "zh-cn"
     );
 
+    const ziweiData = computeZiWeiData({
+      birthDate_iso,
+      birthTime,
+      timezone: detectedTz
+    });
+
     return res.json({
       ok: true,
       detected_timezone: detectedTz,
+      timezone_offset: tzResult.offset,
       beijing_date: solarDate,
       beijing_hour: hour,
       timeIndex,
-      astrolabe
+      astrolabe,
+      ziwei: ziweiData
     });
 
   } catch (err) {
