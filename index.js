@@ -1,173 +1,152 @@
 // index.js
-const express = require('express');
-const cors = require('cors');
-const { DateTime } = require('luxon');
-const { Solar } = require('lunar-javascript');
+const express = require("express");
+const cors = require("cors");
+const { astro } = require("iztro");
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-// --- helper: tebak timezone lokal sederhana ---
-// v1: fokus Indonesia dulu, sisanya fallback ke Asia/Shanghai
-function guessTimezone(country, city) {
-  const c = (country || '').toLowerCase().trim();
-  const k = (city || '').toLowerCase().trim();
+/**
+ * Normalisasi gender dari form → karakter Mandarin untuk iztro
+ * - "male", "laki-laki", "pria", "cowok" → "男"
+ * - "female", "perempuan", "wanita", "cewek" → "女"
+ */
+function normalizeGender(gender) {
+  if (!gender) return "女";
+  const v = String(gender).trim().toLowerCase();
 
-  // Indonesia – v1: pakai Asia/Jakarta dulu (cukup untuk Bandung, Jakarta, dst)
-  if (c === 'indonesia') {
-    return 'Asia/Jakarta';
-  }
+  const maleList = ["male", "laki-laki", "laki", "pria", "cowok", "man"];
+  const femaleList = ["female", "perempuan", "wanita", "cewek", "woman"];
 
-  // fallback: langsung pakai Asia/Shanghai (CST) kalau nggak jelas
-  return 'Asia/Shanghai';
+  if (maleList.includes(v)) return "男";
+  if (femaleList.includes(v)) return "女";
+
+  // default fallback
+  return "女";
 }
 
-// helper normalisasi gender untuk nanti kalau mau pakai getYun()
-function normalizeGender(raw) {
-  const g = (raw || '').toString().toLowerCase().trim();
-  if (['male', 'laki-laki', 'pria', 'laki laki', 'l'].includes(g)) return 1;   // 1 = male
-  if (['female', 'perempuan', 'wanita', 'p'].includes(g)) return 0;            // 0 = female
-  return 1; // default male
+/**
+ * Parse "HH:MM" → { hour, minute }
+ */
+function parseTimeString(timeStr) {
+  if (!timeStr) return { hour: 0, minute: 0 };
+
+  const match = String(timeStr).match(/^(\d{1,2}):(\d{1,2})/);
+  if (!match) return { hour: 0, minute: 0 };
+
+  let hour = parseInt(match[1], 10);
+  let minute = parseInt(match[2], 10);
+
+  if (Number.isNaN(hour)) hour = 0;
+  if (Number.isNaN(minute)) minute = 0;
+
+  // clamp
+  hour = Math.max(0, Math.min(23, hour));
+  minute = Math.max(0, Math.min(59, minute));
+
+  return { hour, minute };
 }
 
-// health check
-app.get('/health', (req, res) => {
-  res.json({ ok: true });
+/**
+ * Konversi jam (0–23) → index cabang bumi (0–11) untuk iztro
+ *
+ * Aturan jam Zi:
+ * - 23:00–00:59  → 子 → index 0
+ * - 01:00–02:59  → 丑 → index 1
+ * - 03:00–04:59  → 寅 → index 2
+ * ...
+ * - 21:00–22:59  → 亥 → index 11
+ */
+function getHourBranchIndex(hour) {
+  if (hour === 23) return 0;
+  return Math.floor((hour + 1) / 2); // hasil: 0–11
+}
+
+// Endpoint sederhana untuk cek service hidup
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    service: "ziwei-service",
+    docs: "POST /ziwei dengan body { birthDate_iso, birthTime, city, country, gender }"
+  });
 });
 
-// endpoint utama
-app.post('/ziwei', (req, res) => {
+/**
+ * Endpoint utama: generate Zi Wei astrolabe pakai iztro
+ * Body yang diharapkan:
+ * {
+ *   "birthDate_iso": "1993-11-08",
+ *   "birthTime": "16:05",
+ *   "city": "Bandung",
+ *   "country": "Indonesia",
+ *   "gender": "male"
+ * }
+ */
+app.post("/ziwei", (req, res) => {
   try {
-    const body = req.body || {};
     const {
-      birthDate_iso,   // "1993-11-08"
-      birthTime,       // "16:05"
+      birthDate_iso,
+      birthTime,
       city,
       country,
       gender
-    } = body;
+    } = req.body || {};
 
-    if (!birthDate_iso) {
+    if (!birthDate_iso || !birthTime || !gender) {
       return res.status(400).json({
-        ok: false,
-        error: 'birthDate_iso is required (e.g. "1993-11-08")'
+        error: "Missing required fields",
+        required: ["birthDate_iso", "birthTime", "gender"]
       });
     }
 
-    // kalau jam kosong / format aneh, fallback ke tengah hari
-    let timeStr = (birthTime || '').trim();
-    if (!/^\d{1,2}:\d{2}$/.test(timeStr)) {
-      timeStr = '12:00';
-    }
+    // Normalisasi tanggal → "YYYY-M-D" (tanpa leading zero) seperti contoh iztro
+    const [yearStr, monthStr, dayStr] = String(birthDate_iso).split("-");
+    const year = Number(yearStr);
+    const month = Number(monthStr);
+    const day = Number(dayStr);
+    const solarDate = `${year}-${month}-${day}`; // contoh: "1993-11-8"
 
-    // timezone lokal berdasarkan negara/kota
-    const localZone = guessTimezone(country, city);
+    // Jam → index cabang bumi
+    const { hour } = parseTimeString(birthTime);
+    const hourBranchIndex = getHourBranchIndex(hour);
 
-    // buat DateTime lokal
-    const localDateTime = DateTime.fromISO(
-      `${birthDate_iso}T${timeStr}`,
-      { zone: localZone }
+    // Gender → "男"/"女"
+    const genderChar = normalizeGender(gender);
+
+    // Panggil iztro
+    const astrolabe = astro.bySolar(
+      solarDate,
+      hourBranchIndex,
+      genderChar,
+      true,        // isBirthSolar: true (pakai tanggal matahari)
+      "en-US"      // output bahasa Inggris, bisa diganti "zh-CN"/"zh-TW" kalau mau asli Mandarin
     );
 
-    if (!localDateTime.isValid) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Invalid birthDate_iso or birthTime'
-      });
-    }
-
-    // konversi ke Beijing time (Asia/Shanghai) untuk perhitungan lunar/BaZi
-    const beijingDateTime = localDateTime.setZone('Asia/Shanghai');
-
-    // konversi ke kalender lunar pakai lunar-javascript
-    const solar = Solar.fromYmdHms(
-      beijingDateTime.year,
-      beijingDateTime.month,
-      beijingDateTime.day,
-      beijingDateTime.hour,
-      beijingDateTime.minute,
-      beijingDateTime.second
-    );
-
-    const lunar = solar.getLunar();
-    const eightChar = lunar.getEightChar(); // BaZi
-
-    // data lunar dasar
-    const lunarInfo = {
-      year: lunar.getYear(),           // tahun lunar (angka)
-      month: lunar.getMonth(),         // bulan lunar
-      day: lunar.getDay(),             // tanggal lunar
-      isLeapMonth: lunar.isLeap(),     // true/false
-      yearGanZhi: lunar.getYearInGanZhi(),   // e.g. "癸酉"
-      monthGanZhi: lunar.getMonthInGanZhi(),
-      dayGanZhi: lunar.getDayInGanZhi(),
-      timeGanZhi: lunar.getTimeInGanZhi(),
-      yearShengXiao: lunar.getYearShengXiao(), // zodiak Cina (Ayam, Anjing, etc.)
-    };
-
-    // BaZi: 4 pilar GanZhi
-    const bazi = {
-      year: eightChar.getYear(),   // e.g. "癸酉"
-      month: eightChar.getMonth(),
-      day: eightChar.getDay(),
-      time: eightChar.getTime()
-    };
-
-    // NaYin masing-masing pilar (buat flavor text kalau mau)
-    const nayin = {
-      year: eightChar.getYearNaYin(),
-      month: eightChar.getMonthNaYin(),
-      day: eightChar.getDayNaYin(),
-      time: eightChar.getTimeNaYin()
-    };
-
-    // kalau nanti mau pakai DaYun/LiuNian:
-    // const genderCode = normalizeGender(gender);
-    // const yun = eightChar.getYun(genderCode, 1);
-    // const daYun = yun.getDaYun();
-    // ... dst (bisa dikirim juga ke LLM kalau mau bacaan prediksi)
-
-    res.json({
-      ok: true,
+    return res.json({
       input: {
         birthDate_iso,
-        birthTime: timeStr,
+        birthTime,
+        solarDate,
         city,
         country,
-        gender
+        gender,
+        genderChar,
+        hourBranchIndex
       },
-      time: {
-        local: {
-          iso: localDateTime.toISO(),
-          timezone: localZone,
-          offset: localDateTime.toFormat('ZZ')
-        },
-        beijing: {
-          iso: beijingDateTime.toISO(),
-          timezone: 'Asia/Shanghai',
-          offset: beijingDateTime.toFormat('ZZ')
-        }
-      },
-      lunar: lunarInfo,
-      bazi,
-      nayin
-      // di fase berikutnya kamu bisa tambahkan:
-      // daYun, liuNian, dst
-      // dan/atau struktur "ziwei_chart" kalau sudah punya algoritma placement bintang
+      astrolabe
     });
   } catch (err) {
-    console.error('Ziwei service error:', err);
-    res.status(500).json({
-      ok: false,
-      error: err.message || 'Internal Server Error'
+    console.error("Ziwei error:", err);
+    return res.status(500).json({
+      error: "Failed to generate Zi Wei chart",
+      detail: err.message || String(err)
     });
   }
 });
 
-// port binding untuk Render
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Ziwei service listening on port ${PORT}`);
+  console.log(`ziwei-service listening on port ${PORT}`);
 });
