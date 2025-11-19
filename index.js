@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { DateTime } from "luxon";
-import { astro } from "iztro";
+import iztro from "iztro";
 import { resolveTimezone } from "./lib/timezone.js";
 import { computeZiWeiData } from "./lib/ziwei.js";
 
@@ -35,7 +35,7 @@ app.post("/ziwei", async (req, res) => {
     const hour = beijingDT.hour;
     const timeIndex = getTimeIndex(hour);
 
-    const astrolabe = astro.astrolabeBySolarDate(
+    const astrolabe = iztro.astro.astrolabeBySolarDate(
       solarDate,
       timeIndex,
       gender,
