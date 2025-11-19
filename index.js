@@ -7,7 +7,78 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
+app.use(express.json());// index.js
+import express from "express";
+import cors from "cors";
+import { resolveTimezone } from "./lib/timezone.js";
+import { computeZiWeiData } from "./lib/ziwei.js";
+
+const app = express();
+app.use(cors());
 app.use(express.json());
+
+app.get("/", (req, res) => {
+  res.json({ status: "ok", service: "ziwei-microservice" });
+});
+
+app.post("/ziwei", async (req, res) => {
+  try {
+    const {
+      birthDate_iso,
+      birthTime,
+      city,
+      country,
+      gender = "unknown"
+    } = req.body || {};
+
+    if (!birthDate_iso || !city || !country) {
+      return res.status(400).json({
+        error: "birthDate_iso, city, dan country wajib diisi"
+      });
+    }
+
+    // 1) Cari timezone dari API eksternal
+    const { timezone, offset } = await resolveTimezone(city, country);
+
+    // 2) Hitung data teknis ZiWei (lunar, ganzhi, dsb)
+    const core = computeZiWeiData({
+      birthDate_iso,
+      birthTime,
+      timezone
+    });
+
+    // 3) Susun response yang enak dipakai LLM
+    res.json({
+      input: {
+        birthDate_iso,
+        birthTime,
+        city,
+        country,
+        gender,
+        timezone,
+        utc_offset: offset
+      },
+      ziwei_core: core
+      // nanti kamu bisa tambah:
+      // ziwei_palaces,
+      // ziwei_mainStars,
+      // ziwei_transforms,
+      // dll
+    });
+  } catch (err) {
+    console.error("POST /ziwei error:", err);
+    res.status(500).json({
+      error: "Internal server error",
+      message: err.message
+    });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`ZiWei service running on port ${PORT}`);
+});
+
 
 // Utility: mapping jam → timeIndex (12 cabang bumi)
 // Zi (子) : 23:00–00:59 => 0
