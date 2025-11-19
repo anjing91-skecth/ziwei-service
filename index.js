@@ -1,81 +1,42 @@
-// index.js
-const express = require("express");
-const cors = require("cors");
-const { astro } = require("iztro");
+import express from "express";
+import { astro } from "iztro";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(cors());
 app.use(express.json());
 
 /**
- * Normalisasi gender dari form → karakter Mandarin untuk iztro
- * - "male", "laki-laki", "pria", "cowok" → "男"
- * - "female", "perempuan", "wanita", "cewek" → "女"
- */
-function normalizeGender(gender) {
-  if (!gender) return "女";
-  const v = String(gender).trim().toLowerCase();
-
-  const maleList = ["male", "laki-laki", "laki", "pria", "cowok", "man"];
-  const femaleList = ["female", "perempuan", "wanita", "cewek", "woman"];
-
-  if (maleList.includes(v)) return "男";
-  if (femaleList.includes(v)) return "女";
-
-  // default fallback
-  return "女";
-}
-
-/**
- * Parse "HH:MM" → { hour, minute }
- */
-function parseTimeString(timeStr) {
-  if (!timeStr) return { hour: 0, minute: 0 };
-
-  const match = String(timeStr).match(/^(\d{1,2}):(\d{1,2})/);
-  if (!match) return { hour: 0, minute: 0 };
-
-  let hour = parseInt(match[1], 10);
-  let minute = parseInt(match[2], 10);
-
-  if (Number.isNaN(hour)) hour = 0;
-  if (Number.isNaN(minute)) minute = 0;
-
-  // clamp
-  hour = Math.max(0, Math.min(23, hour));
-  minute = Math.max(0, Math.min(59, minute));
-
-  return { hour, minute };
-}
-
-/**
- * Konversi jam (0–23) → index cabang bumi (0–11) untuk iztro
- *
- * Aturan jam Zi:
- * - 23:00–00:59  → 子 → index 0
- * - 01:00–02:59  → 丑 → index 1
- * - 03:00–04:59  → 寅 → index 2
+ * Konversi "HH:MM" → index jam 0-11
+ * Rumus umum Ziwei: tiap 2 jam 1 cabang.
+ * 23:00–00:59   → 0 (Zi / Rat)
+ * 01:00–02:59   → 1 (Chou)
+ * 03:00–04:59   → 2 (Yin)
  * ...
- * - 21:00–22:59  → 亥 → index 11
+ * 21:00–22:59   → 11 (Hai)
  */
-function getHourBranchIndex(hour) {
-  if (hour === 23) return 0;
-  return Math.floor((hour + 1) / 2); // hasil: 0–11
+function getHourIndexFromTime(timeStr) {
+  if (!timeStr) return 0;
+  const [hhStr] = String(timeStr).split(":");
+  const h = parseInt(hhStr, 10);
+  if (Number.isNaN(h)) return 0;
+
+  // formula: floor(((h + 1) % 24) / 2)
+  return Math.floor(((h + 1) % 24) / 2);
 }
 
-// Endpoint sederhana untuk cek service hidup
-app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    service: "ziwei-service",
-    docs: "POST /ziwei dengan body { birthDate_iso, birthTime, city, country, gender }"
-  });
-});
+/**
+ * Optional: normalisasi gender ke "male"/"female"
+ */
+function normalizeGender(g) {
+  if (!g) return "male";
+  const s = String(g).toLowerCase();
+  if (s.includes("perempuan") || s.includes("wanita") || s.includes("female")) {
+    return "female";
+  }
+  return "male";
+}
 
 /**
- * Endpoint utama: generate Zi Wei astrolabe pakai iztro
+ * Endpoint utama untuk n8n
  * Body yang diharapkan:
  * {
  *   "birthDate_iso": "1993-11-08",
@@ -97,56 +58,49 @@ app.post("/ziwei", (req, res) => {
 
     if (!birthDate_iso || !birthTime || !gender) {
       return res.status(400).json({
-        error: "Missing required fields",
-        required: ["birthDate_iso", "birthTime", "gender"]
+        error: "Missing required fields: birthDate_iso, birthTime, gender"
       });
     }
 
-    // Normalisasi tanggal → "YYYY-M-D" (tanpa leading zero) seperti contoh iztro
-    const [yearStr, monthStr, dayStr] = String(birthDate_iso).split("-");
-    const year = Number(yearStr);
-    const month = Number(monthStr);
-    const day = Number(dayStr);
-    const solarDate = `${year}-${month}-${day}`; // contoh: "1993-11-8"
+    const genderNormalized = normalizeGender(gender);
+    const hourIndex = getHourIndexFromTime(birthTime);
 
-    // Jam → index cabang bumi
-    const { hour } = parseTimeString(birthTime);
-    const hourBranchIndex = getHourBranchIndex(hour);
+    // birthDate_iso sudah format "YYYY-MM-DD"
+    const solarDate = birthDate_iso;
 
-    // Gender → "男"/"女"
-    const genderChar = normalizeGender(gender);
-
-    // Panggil iztro
-    const astrolabe = astro.bySolar(
+    // Panggil iztro → sesuai dokumentasi
+    const astrolabe = astro.astrolabeBySolarDate(
       solarDate,
-      hourBranchIndex,
-      genderChar,
-      true,        // isBirthSolar: true (pakai tanggal matahari)
-      "en-US"      // output bahasa Inggris, bisa diganti "zh-CN"/"zh-TW" kalau mau asli Mandarin
+      hourIndex,
+      genderNormalized
     );
 
     return res.json({
       input: {
         birthDate_iso,
         birthTime,
-        solarDate,
-        city,
-        country,
-        gender,
-        genderChar,
-        hourBranchIndex
+        city: city || null,
+        country: country || null,
+        gender: genderNormalized,
+        hourIndex
       },
       astrolabe
     });
   } catch (err) {
     console.error("Ziwei error:", err);
     return res.status(500).json({
-      error: "Failed to generate Zi Wei chart",
-      detail: err.message || String(err)
+      error: "internal_error",
+      message: err?.message || String(err)
     });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`ziwei-service listening on port ${PORT}`);
+// Health check sederhana
+app.get("/", (_req, res) => {
+  res.json({ status: "ok", service: "ziwei-service" });
+});
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Ziwei service listening on port ${port}`);
 });
