@@ -1,16 +1,15 @@
 {
-  "name": "ziwei-service",
+  "name": "iztro-api",
   "version": "1.0.0",
-  "description": "Microservice iztro for Zi Wei Dou Shu",
-  "main": "index.js",
   "type": "module",
+  "main": "index.mjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.mjs"
   },
   "dependencies": {
-  "iztro": "^2.5.3",
-  "express": "^4.18.2",
-  "cors": "^2.8.5"
+    "express": "^4.21.0",
+    "cors": "^2.8.5",
+    "luxon": "^3.5.0",
+    "iztro": "latest"
   }
-
 }
