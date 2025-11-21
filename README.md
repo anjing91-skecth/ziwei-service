@@ -59,3 +59,13 @@ This compiles the standalone binary once per deployment and lets the Node proces
 | `BAZI_GO_CMD` | Custom command to launch BaZi (advanced). | unset |
 
 When `BAZI_SERVICE_URL` is provided, the server skips the embedded availability check so that `/bazi` will always proxy to your external service.
+
+## BaZi timezone normalization
+
+The `/bazi` endpoint accepts `birthDate`, `birthTime`, `city`, and `country`. Before proxying the request to the Go service, the Node layer:
+
+1. Resolves the timezone using `city-timezones` and `geo-tz` (or a provided `timezone` override).
+2. Builds a Luxon `DateTime` in that local timezone.
+3. Converts it to `Asia/Shanghai` (Beijing) and sends the adjusted date/time to the Go API.
+
+Every BaZi response now includes a `meta` block showing the requested values, detected timezone, offset, and the normalized Beijing timestamp so you can audit what the service used internally.

@@ -2,10 +2,12 @@ import express from "express";
 import cors from "cors";
 import { astro } from "iztro";
 import fetch from "node-fetch";
+import { DateTime } from "luxon";
 import { spawn, spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { resolveTimezone } from "./lib/timezone.js";
 
 const app = express();
 app.use(cors());
@@ -163,6 +165,60 @@ function embeddedBaziUnavailable() {
   return !embeddedBaziReady;
 }
 
+async function buildBaziPayload(body) {
+  const {
+    birthDate,
+    birthTime,
+    city,
+    country,
+    timezone: timezoneOverride
+  } = body || {};
+
+  if (!birthDate) {
+    throw new Error("birthDate is required");
+  }
+
+  const normalizedTime = birthTime || "12:00";
+  let detectedTimezone = timezoneOverride;
+  let timezoneSource = timezoneOverride ? "request" : "city-timezones";
+  let offset = null;
+
+  if (!detectedTimezone) {
+    const tzInfo = await resolveTimezone(city, country);
+    detectedTimezone = tzInfo?.timezone;
+    timezoneSource = tzInfo?.source || "fallback";
+    offset = tzInfo?.offset || null;
+  }
+
+  const localDateTime = DateTime.fromISO(`${birthDate}T${normalizedTime}`, {
+    zone: detectedTimezone || "UTC"
+  });
+  if (!localDateTime.isValid) {
+    throw new Error("Invalid birthDate/birthTime or timezone.");
+  }
+
+  const beijingDateTime = localDateTime.setZone("Asia/Shanghai");
+
+  return {
+    payload: {
+      birthDate: beijingDateTime.toFormat("yyyy-MM-dd"),
+      birthTime: birthTime ? beijingDateTime.toFormat("HH:mm") : ""
+    },
+    meta: {
+      requestedDate: birthDate,
+      requestedTime: birthTime || null,
+      city: city || null,
+      country: country || null,
+      detectedTimezone: localDateTime.zoneName,
+      timezoneSource,
+      timezoneOffset: offset || localDateTime.offsetNameLong || null,
+      beijingDate: beijingDateTime.toFormat("yyyy-MM-dd"),
+      beijingTime: beijingDateTime.toFormat("HH:mm"),
+      beijingISO: beijingDateTime.toISO()
+    }
+  };
+}
+
 /**
  * Konversi "HH:MM" → index jam 0-11
  * Rumus umum Ziwei: tiap 2 jam 1 cabang.
@@ -255,45 +311,51 @@ app.post("/ziwei", (req, res) => {
 });
 
 app.post("/bazi", async (req, res) => {
-  const { birthDate, birthTime } = req.body || {};
-  if (!birthDate) {
-    return res.status(400).json({
-      success: false,
-      error: "birthDate is required"
-    });
-  }
-
-  if (embeddedBaziUnavailable()) {
-    return res.status(503).json({
-      success: false,
-      error: "bazi_service_unavailable",
-      message:
-        embeddedBaziError ||
-        "Embedded BaZi service is not running. Provide BAZI_SERVICE_URL or install Go/BAZI_GO_BINARY."
-    });
-  }
-
   try {
+    const { payload, meta } = await buildBaziPayload(req.body || {});
+
+    if (embeddedBaziUnavailable()) {
+      return res.status(503).json({
+        success: false,
+        error: "bazi_service_unavailable",
+        message:
+          embeddedBaziError ||
+          "Embedded BaZi service is not running. Provide BAZI_SERVICE_URL or install Go/BAZI_GO_BINARY.",
+        meta
+      });
+    }
+
     const response = await fetch(`${BAZI_SERVICE_URL}/bazi`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ birthDate, birthTime })
+      body: JSON.stringify(payload)
     });
 
     const data = await response.json().catch(() => null);
-    if (data) {
-      return res.status(response.status).json(data);
+    if (data && typeof data === "object") {
+      return res.status(response.status).json({
+        ...data,
+        meta: {
+          ...(data.meta || {}),
+          ...meta
+        }
+      });
     }
 
     return res.status(502).json({
       success: false,
-      error: "BaZi service returned a non-JSON response"
+      error: "BaZi service returned a non-JSON response",
+      meta
     });
   } catch (err) {
-    console.error("BaZi proxy error:", err);
-    return res.status(502).json({
+    const message = err?.message || String(err);
+    const isValidation = message.toLowerCase().includes("birthdate");
+    console.error("BaZi payload error:", err);
+    return res.status(isValidation ? 400 : 500).json({
       success: false,
-      error: `Failed to contact BaZi service: ${err?.message || String(err)}`
+      error: isValidation ? "invalid_birth_data" : "internal_error",
+      message,
+      meta: err.meta || null
     });
   }
 });
