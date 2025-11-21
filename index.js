@@ -170,9 +170,14 @@ async function buildBaziPayload(body) {
     birthDate,
     birthTime,
     city,
+    birthPlace,
     country,
+    birthCountry,
     timezone: timezoneOverride
   } = body || {};
+
+  const cityInput = city || birthPlace || null;
+  const countryInput = country || birthCountry || null;
 
   if (!birthDate) {
     throw new Error("birthDate is required");
@@ -184,7 +189,7 @@ async function buildBaziPayload(body) {
   let offset = null;
 
   if (!detectedTimezone) {
-    const tzInfo = await resolveTimezone(city, country);
+    const tzInfo = await resolveTimezone(cityInput, countryInput);
     detectedTimezone = tzInfo?.timezone;
     timezoneSource = tzInfo?.source || "fallback";
     offset = tzInfo?.offset || null;
@@ -207,8 +212,8 @@ async function buildBaziPayload(body) {
     meta: {
       requestedDate: birthDate,
       requestedTime: birthTime || null,
-      city: city || null,
-      country: country || null,
+      city: cityInput,
+      country: countryInput,
       detectedTimezone: localDateTime.zoneName,
       timezoneSource,
       timezoneOffset: offset || localDateTime.offsetNameLong || null,
@@ -267,7 +272,9 @@ app.post("/ziwei", (req, res) => {
       birthDate_iso,
       birthTime,
       city,
+      birthPlace,
       country,
+      birthCountry,
       gender
     } = req.body || {};
 
@@ -279,6 +286,8 @@ app.post("/ziwei", (req, res) => {
 
     const genderNormalized = normalizeGender(gender);
     const hourIndex = getHourIndexFromTime(birthTime);
+    const cityInput = city || birthPlace || null;
+    const countryInput = country || birthCountry || null;
 
     // birthDate_iso sudah format "YYYY-MM-DD"
     const solarDate = birthDate_iso;
@@ -294,8 +303,8 @@ app.post("/ziwei", (req, res) => {
       input: {
         birthDate_iso,
         birthTime,
-        city: city || null,
-        country: country || null,
+        city: cityInput,
+        country: countryInput,
         gender: genderNormalized,
         hourIndex
       },
