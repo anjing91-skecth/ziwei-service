@@ -27,8 +27,8 @@ This repository hosts two small services that can share the same deployment targ
 
 The Node server can spawn the Go binary automatically so that a single container exposes both `/ziwei` and `/bazi`. Pick one of the following:
 
-- **Provide a compiled binary**: copy a pre-built Linux binary to `bazi-go/bazi-go` (or point `BAZI_GO_BINARY` to its location). No Go toolchain is required at runtime.
-- **Install Go in the container**: ensure the `go` command is available so the server can run `go run main.go`. On Render you can use a custom start/build script that installs Go before starting Node.
+- **Use the bundled binary**: this repo ships with a Linux AMD64 build at `bazi-go/bazi-go`, so Render (or any Linux deployment) can run without the Go toolchain.
+- **Install Go in the container**: ensure the `go` command is available so the server can recompile when needed (`go run main.go`).
 
 If neither a binary nor the Go toolchain is available, the server logs a warning and every `/bazi` request returns HTTP `503` (`bazi_service_unavailable`). In that case either install Go, supply a binary, or set `BAZI_SERVICE_URL` to point at an external BaZi deployment.
 
@@ -38,7 +38,14 @@ Example start command when Go is available:
 bash -c "cd bazi-go && go build -o bazi-go && cd .. && node index.js"
 ```
 
-This compiles the standalone binary once per deployment and lets the Node process execute it directly.
+The bundled binary was built with `GOOS=linux GOARCH=amd64`. If you make changes to `bazi-go/main.go`, rebuild it with the same command so the checked-in binary stays in sync:
+
+```bash
+cd bazi-go
+GOOS=linux GOARCH=amd64 go build -o bazi-go
+```
+
+This compiles the standalone binary once per deployment and lets the Node process execute it directly. Delete or replace the binary if you prefer to rely on the Go toolchain instead.
 
 ## Environment variables
 
