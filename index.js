@@ -1,8 +1,13 @@
 import express from "express";
+import cors from "cors";
 import { astro } from "iztro";
+import fetch from "node-fetch";
 
 const app = express();
+app.use(cors());
 app.use(express.json());
+
+const BAZI_SERVICE_URL = process.env.BAZI_SERVICE_URL || "http://localhost:8081";
 
 /**
  * Konversi "HH:MM" → index jam 0-11
@@ -91,6 +96,40 @@ app.post("/ziwei", (req, res) => {
     return res.status(500).json({
       error: "internal_error",
       message: err?.message || String(err)
+    });
+  }
+});
+
+app.post("/bazi", async (req, res) => {
+  const { birthDate, birthTime } = req.body || {};
+  if (!birthDate) {
+    return res.status(400).json({
+      success: false,
+      error: "birthDate is required"
+    });
+  }
+
+  try {
+    const response = await fetch(`${BAZI_SERVICE_URL}/bazi`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ birthDate, birthTime })
+    });
+
+    const data = await response.json().catch(() => null);
+    if (data) {
+      return res.status(response.status).json(data);
+    }
+
+    return res.status(502).json({
+      success: false,
+      error: "BaZi service returned a non-JSON response"
+    });
+  } catch (err) {
+    console.error("BaZi proxy error:", err);
+    return res.status(502).json({
+      success: false,
+      error: `Failed to contact BaZi service: ${err?.message || String(err)}`
     });
   }
 });
