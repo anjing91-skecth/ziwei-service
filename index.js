@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import { astro } from "iztro";
 import fetch from "node-fetch";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -15,6 +15,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const BAZI_GO_PORT = process.env.BAZI_GO_PORT || "8081";
+const usesCustomBaziUrl = Boolean(process.env.BAZI_SERVICE_URL);
 const BAZI_SERVICE_URL =
   process.env.BAZI_SERVICE_URL || `http://127.0.0.1:${BAZI_GO_PORT}`;
 const EMBED_BAZI = process.env.EMBED_BAZI !== "false";
@@ -22,32 +23,66 @@ const BAZI_GO_BINARY =
   process.env.BAZI_GO_BINARY || path.join(__dirname, "bazi-go", "bazi-go");
 
 let baziProcess = null;
+let embeddedBaziReady = false;
+let embeddedBaziError = null;
+let cachedGoAvailability = null;
+
+function hasGoToolchain() {
+  if (cachedGoAvailability !== null) {
+    return cachedGoAvailability;
+  }
+  try {
+    const result = spawnSync("go", ["version"], { stdio: "ignore" });
+    cachedGoAvailability = !result.error && result.status === 0;
+  } catch (err) {
+    cachedGoAvailability = false;
+  }
+  return cachedGoAvailability;
+}
 
 function determineBaziCommand() {
   const custom = process.env.BAZI_GO_CMD;
   if (custom) {
     return {
-      cmd: custom,
-      args: [],
-      cwd: __dirname,
-      shell: true
+      command: {
+        cmd: custom,
+        args: [],
+        cwd: __dirname,
+        shell: true
+      }
     };
   }
   if (fs.existsSync(BAZI_GO_BINARY)) {
-    return { cmd: BAZI_GO_BINARY, args: [] };
+    return { command: { cmd: BAZI_GO_BINARY, args: [] } };
   }
   const sourceDir = path.join(__dirname, "bazi-go");
   if (fs.existsSync(path.join(sourceDir, "main.go"))) {
+    if (hasGoToolchain()) {
+      return {
+        command: {
+          cmd: "go",
+          args: ["run", "main.go"],
+          cwd: sourceDir
+        }
+      };
+    }
     return {
-      cmd: "go",
-      args: ["run", "main.go"],
-      cwd: sourceDir
+      command: null,
+      warning:
+        "Go toolchain is not available. Install Go or provide BAZI_GO_BINARY so the embedded service can start."
     };
   }
-  return null;
+  return {
+    command: null,
+    warning:
+      "Could not find BaZi binary or source directory. Set BAZI_SERVICE_URL to a remote BaZi API or supply BAZI_GO_BINARY."
+  };
 }
 
 function startEmbeddedBazi() {
+  embeddedBaziReady = false;
+  embeddedBaziError = null;
+
   if (!EMBED_BAZI) {
     console.log(
       `[BaZi] Embedded mode disabled; expecting service at ${BAZI_SERVICE_URL}`
@@ -55,11 +90,12 @@ function startEmbeddedBazi() {
     return;
   }
 
-  const spawnInfo = determineBaziCommand();
+  const { command: spawnInfo, warning } = determineBaziCommand();
   if (!spawnInfo) {
-    console.warn(
-      "[BaZi] Could not find Go binary or source. Set BAZI_SERVICE_URL to an external service or provide BAZI_GO_BINARY."
-    );
+    embeddedBaziError =
+      warning ||
+      "Could not resolve command to launch the embedded BaZi service.";
+    console.warn(`[BaZi] ${embeddedBaziError}`);
     return;
   }
 
@@ -74,11 +110,16 @@ function startEmbeddedBazi() {
     stdio: ["ignore", "inherit", "inherit"]
   });
 
+  embeddedBaziReady = true;
+
   baziProcess.on("error", err => {
+    embeddedBaziReady = false;
+    embeddedBaziError = err?.message || String(err);
     console.error("[BaZi] Failed to start embedded service:", err);
   });
 
   baziProcess.on("exit", (code, signal) => {
+    embeddedBaziReady = false;
     console.error(
       `[BaZi] Embedded service exited (code=${code ?? "null"}, signal=${
         signal ?? "null"
@@ -114,6 +155,12 @@ function stopEmbeddedBazi() {
     child.once("exit", handleExit);
     child.kill("SIGTERM");
   });
+}
+function embeddedBaziUnavailable() {
+  if (!EMBED_BAZI || usesCustomBaziUrl) {
+    return false;
+  }
+  return !embeddedBaziReady;
 }
 
 /**
@@ -213,6 +260,16 @@ app.post("/bazi", async (req, res) => {
     return res.status(400).json({
       success: false,
       error: "birthDate is required"
+    });
+  }
+
+  if (embeddedBaziUnavailable()) {
+    return res.status(503).json({
+      success: false,
+      error: "bazi_service_unavailable",
+      message:
+        embeddedBaziError ||
+        "Embedded BaZi service is not running. Provide BAZI_SERVICE_URL or install Go/BAZI_GO_BINARY."
     });
   }
 
