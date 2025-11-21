@@ -2,12 +2,119 @@ import express from "express";
 import cors from "cors";
 import { astro } from "iztro";
 import fetch from "node-fetch";
+import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const BAZI_SERVICE_URL = process.env.BAZI_SERVICE_URL || "http://localhost:8081";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const BAZI_GO_PORT = process.env.BAZI_GO_PORT || "8081";
+const BAZI_SERVICE_URL =
+  process.env.BAZI_SERVICE_URL || `http://127.0.0.1:${BAZI_GO_PORT}`;
+const EMBED_BAZI = process.env.EMBED_BAZI !== "false";
+const BAZI_GO_BINARY =
+  process.env.BAZI_GO_BINARY || path.join(__dirname, "bazi-go", "bazi-go");
+
+let baziProcess = null;
+
+function determineBaziCommand() {
+  const custom = process.env.BAZI_GO_CMD;
+  if (custom) {
+    return {
+      cmd: custom,
+      args: [],
+      cwd: __dirname,
+      shell: true
+    };
+  }
+  if (fs.existsSync(BAZI_GO_BINARY)) {
+    return { cmd: BAZI_GO_BINARY, args: [] };
+  }
+  const sourceDir = path.join(__dirname, "bazi-go");
+  if (fs.existsSync(path.join(sourceDir, "main.go"))) {
+    return {
+      cmd: "go",
+      args: ["run", "main.go"],
+      cwd: sourceDir
+    };
+  }
+  return null;
+}
+
+function startEmbeddedBazi() {
+  if (!EMBED_BAZI) {
+    console.log(
+      `[BaZi] Embedded mode disabled; expecting service at ${BAZI_SERVICE_URL}`
+    );
+    return;
+  }
+
+  const spawnInfo = determineBaziCommand();
+  if (!spawnInfo) {
+    console.warn(
+      "[BaZi] Could not find Go binary or source. Set BAZI_SERVICE_URL to an external service or provide BAZI_GO_BINARY."
+    );
+    return;
+  }
+
+  console.log("[BaZi] Starting embedded BaZi service...");
+  baziProcess = spawn(spawnInfo.cmd, spawnInfo.args, {
+    cwd: spawnInfo.cwd,
+    shell: spawnInfo.shell || false,
+    env: {
+      ...process.env,
+      PORT: BAZI_GO_PORT
+    },
+    stdio: ["ignore", "inherit", "inherit"]
+  });
+
+  baziProcess.on("error", err => {
+    console.error("[BaZi] Failed to start embedded service:", err);
+  });
+
+  baziProcess.on("exit", (code, signal) => {
+    console.error(
+      `[BaZi] Embedded service exited (code=${code ?? "null"}, signal=${
+        signal ?? "null"
+      }).`
+    );
+  });
+
+  console.log(`[BaZi] Embedded service PID: ${baziProcess.pid}`);
+}
+
+function stopEmbeddedBazi() {
+  if (!baziProcess) {
+    return Promise.resolve();
+  }
+
+  const child = baziProcess;
+  baziProcess = null;
+  console.log(`[BaZi] Stopping embedded service (pid=${child.pid})...`);
+
+  return new Promise(resolve => {
+    const forceKillTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        console.warn("[BaZi] Embedded service still running; force killing.");
+        child.kill("SIGKILL");
+      }
+    }, 4000);
+
+    const handleExit = () => {
+      clearTimeout(forceKillTimer);
+      resolve();
+    };
+
+    child.once("exit", handleExit);
+    child.kill("SIGTERM");
+  });
+}
 
 /**
  * Konversi "HH:MM" → index jam 0-11
@@ -139,7 +246,27 @@ app.get("/", (_req, res) => {
   res.json({ status: "ok", service: "ziwei-service" });
 });
 
+startEmbeddedBazi();
+
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`Ziwei service listening on port ${port}`);
 });
+
+async function gracefulShutdown(signal) {
+  console.log(`Received ${signal}. Shutting down...`);
+  try {
+    await stopEmbeddedBazi();
+  } catch (err) {
+    console.error("[BaZi] Error while stopping embedded service:", err);
+  }
+  server.close(() => {
+    process.exit(0);
+  });
+}
+
+["SIGINT", "SIGTERM"].forEach(signal => {
+  process.on(signal, () => gracefulShutdown(signal));
+});
+
+process.on("exit", stopEmbeddedBazi);
