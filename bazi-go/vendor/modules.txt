@@ -1,0 +1,12 @@
+# github.com/Lofanmi/chinese-calendar-golang v0.0.0-20250312143717-353343ff62ba
+## explicit; go 1.16
+github.com/Lofanmi/chinese-calendar-golang/animal
+github.com/Lofanmi/chinese-calendar-golang/calendar
+github.com/Lofanmi/chinese-calendar-golang/constellation
+github.com/Lofanmi/chinese-calendar-golang/gan
+github.com/Lofanmi/chinese-calendar-golang/ganzhi
+github.com/Lofanmi/chinese-calendar-golang/lunar
+github.com/Lofanmi/chinese-calendar-golang/solar
+github.com/Lofanmi/chinese-calendar-golang/solarterm
+github.com/Lofanmi/chinese-calendar-golang/utils
+github.com/Lofanmi/chinese-calendar-golang/zhi

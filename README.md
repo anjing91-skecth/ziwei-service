@@ -47,6 +47,14 @@ GOOS=linux GOARCH=amd64 go build -o bazi-go
 
 This compiles the standalone binary once per deployment and lets the Node process execute it directly. Delete or replace the binary if you prefer to rely on the Go toolchain instead.
 
+## Guarding against upstream repo removal
+
+Some Ziwei/BaZi libraries are community projects that could disappear if the maintainer deletes their repository. This repo mirrors the critical pieces so deployments stay healthy even if the upstream source vanishes.
+
+- **Ziwei (`iztro`)** – `vendor/iztro` contains the compiled package copied from npm, and `package.json` points to `file:vendor/iztro` so installs stay offline. To refresh it, install the desired version into `node_modules`, remove `vendor/iztro`, copy the package over, and commit the result.
+- **BaZi (`github.com/Lofanmi/chinese-calendar-golang`)** – the Go module is vendored inside `bazi-go/vendor`. The embedded launcher now runs `go run -mod=vendor main.go`, so builds/readiness checks never reach the network. To update it, run `cd bazi-go && go get github.com/Lofanmi/chinese-calendar-golang@<version> && go mod tidy && go mod vendor`, then rebuild the bundled binary if needed.
+- **Offline builds** – when compiling manually, prefer `GOFLAGS=-mod=vendor go build -o bazi-go` so you only touch vendored sources. For Node, `npm install` automatically uses the mirrored `vendor/iztro` package.
+
 ## Environment variables
 
 | Variable | Description | Default |

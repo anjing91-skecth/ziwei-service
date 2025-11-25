@@ -63,7 +63,7 @@ function determineBaziCommand() {
       return {
         command: {
           cmd: "go",
-          args: ["run", "main.go"],
+          args: ["run", "-mod=vendor", "main.go"],
           cwd: sourceDir
         }
       };
